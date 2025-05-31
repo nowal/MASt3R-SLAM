@@ -110,7 +110,7 @@ echo "SCRIPT: PYTHON_MULTIPROCESSING_START_METHOD environment variable EXPORTED 
 # --workers 1 is CRITICAL for this application.
 # Use `new_fast:app` to point to your FastAPI application instance.
 GUNICORN_CMD="sudo -E $CONDA_PYTHON_PATH -m gunicorn new_fast:app \
-  --bind 0.0.0.0:443 \
+  --bind 0.0.0.0:8443 \
   --workers 1 \
   --worker-class uvicorn.workers.UvicornWorker \
   --timeout 300 \
