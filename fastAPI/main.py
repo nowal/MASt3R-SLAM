@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .connection_manager import connection_manager
 from .data_receiver import data_receiver
 from .image_processor import image_processor
+from .global_optimizer import get_global_optimization_stats, reset_global_optimization_stats
+from .relocalization import get_relocalization_stats, reset_relocalization_stats
 
 # Import SLAM config loading
 from mast3r_slam.config import load_config, config
@@ -240,6 +242,48 @@ async def get_active_sessions():
     except Exception as e:
         logger.error(f"Error getting active sessions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get sessions info: {str(e)}")
+
+@app.get("/tracking_stats")
+async def get_tracking_stats():
+    """Get comprehensive tracking statistics"""
+    try:
+        sessions_info = await connection_manager.get_all_sessions_info()
+        data_stats = data_receiver.get_stats()
+        global_opt_stats = get_global_optimization_stats()
+        reloc_stats = get_relocalization_stats()
+        
+        return {
+            "sessions": sessions_info,
+            "data_receiver": data_stats,
+            "global_optimization": global_opt_stats,
+            "relocalization": reloc_stats,
+            "system_info": {
+                "cuda_available": torch.cuda.is_available(),
+                "device": image_processor.device,
+                "torch_version": torch.__version__
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting tracking stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get tracking stats: {str(e)}")
+
+@app.post("/reset_stats")
+async def reset_tracking_stats():
+    """Reset all tracking statistics"""
+    try:
+        reset_global_optimization_stats()
+        reset_relocalization_stats()
+        
+        logger.info("All tracking statistics reset")
+        return {
+            "status": "success",
+            "message": "All tracking statistics have been reset"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error resetting stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to reset stats: {str(e)}")
 
 @app.get("/health")
 async def health_check():

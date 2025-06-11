@@ -12,6 +12,9 @@ from typing import Dict, Optional, Any
 from fastapi import WebSocket, WebSocketDisconnect
 from contextlib import asynccontextmanager
 from .session_setup import SessionSetup
+from .session_keyframes import SessionKeyframes
+from .frame_tracker_wrapper import FrameTrackerWrapper
+from mast3r_slam.frame import Mode, Frame
 
 logger = logging.getLogger("ConnectionManager")
 
@@ -28,6 +31,21 @@ class SessionData:
         self.metadata_buffer = {}  # Store metadata waiting for binary data
         self.slam_initializer = None  # Will be created when needed
         
+        # SLAM tracking state
+        self.slam_mode = Mode.INIT
+        self.keyframes: Optional[SessionKeyframes] = None  # For tracking (stable poses)
+        self.optimization_keyframes: Optional[SessionKeyframes] = None  # For bundle adjustment (optimized poses)
+        self.frame_tracker: Optional[FrameTrackerWrapper] = None
+        self.frame_tracker_instance = None  # The actual FrameTracker instance
+        self.last_frame: Optional[Frame] = None
+        self.current_camera_pose = None  # Current estimated camera pose (like states.get_frame().T_WC in original)
+        self.tracking_stats = {
+            "frames_processed": 0,
+            "keyframes_added": 0,
+            "tracking_failures": 0,
+            "relocalization_attempts": 0
+        }
+        
     def update_frame_stats(self):
         """Update frame reception statistics"""
         self.frames_received += 1
@@ -35,13 +53,46 @@ class SessionData:
         
     def get_session_info(self) -> Dict[str, Any]:
         """Get session information for debugging/monitoring"""
+        slam_info = {
+            "slam_mode": self.slam_mode.name if self.slam_mode else "UNKNOWN",
+            "num_keyframes": len(self.keyframes) if self.keyframes else 0,
+            "num_optimization_keyframes": len(self.optimization_keyframes) if self.optimization_keyframes else 0,
+            "has_frame_tracker": self.frame_tracker is not None,
+            "last_frame_id": self.last_frame.frame_id if self.last_frame else None,
+            "tracking_stats": self.tracking_stats.copy()
+        }
+        
         return {
             "session_id": self.session_id,
             "start_time": self.start_time,
             "frames_received": self.frames_received,
             "last_frame_time": self.last_frame_time,
             "is_connected": self.is_connected,
-            "uptime_seconds": time.time() - self.start_time
+            "uptime_seconds": time.time() - self.start_time,
+            "slam_info": slam_info
+        }
+    
+    def cleanup_slam_state(self):
+        """Clean up SLAM tracking state"""
+        if self.keyframes:
+            self.keyframes.cleanup()
+            self.keyframes = None
+        
+        if self.optimization_keyframes:
+            self.optimization_keyframes.cleanup()
+            self.optimization_keyframes = None
+        
+        self.frame_tracker = None
+        self.frame_tracker_instance = None
+        self.last_frame = None
+        self.slam_mode = Mode.INIT
+        
+        # Reset tracking stats
+        self.tracking_stats = {
+            "frames_processed": 0,
+            "keyframes_added": 0,
+            "tracking_failures": 0,
+            "relocalization_attempts": 0
         }
 
 class ConnectionManager:
@@ -129,6 +180,10 @@ class ConnectionManager:
                 logger.info(f"Cleaning up SLAM initializer for session {session_id}")
                 session_data.slam_initializer.cleanup()
                 session_data.slam_initializer = None
+            
+            # Clean up SLAM tracking state
+            logger.info(f"Cleaning up SLAM tracking state for session {session_id}")
+            session_data.cleanup_slam_state()
             
             session_info = session_data.get_session_info()
             logger.info(f"Session {session_id} disconnected. Stats: {session_info}")

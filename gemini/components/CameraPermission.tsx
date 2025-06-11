@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 interface CameraPermissionProps {
-  onCameraReady: (stream: MediaStream) => void;
+  onCameraReady: (stream: MediaStream, videoElement: HTMLVideoElement) => void;
   onError: (error: string) => void;
   width?: number;
   height?: number;
@@ -41,7 +41,7 @@ export default function CameraPermission({
           const handleMetadataLoaded = () => {
             console.log('CameraPermission: Camera ready.');
             setIsCameraReady(true);
-            onCameraReady(currentStream!);
+            onCameraReady(currentStream!, videoEl);
             videoEl.removeEventListener('loadedmetadata', handleMetadataLoaded);
           };
           

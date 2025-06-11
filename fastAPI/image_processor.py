@@ -16,6 +16,7 @@ from typing import Optional, Tuple, Dict, Any
 # Import SLAM functions
 from mast3r_slam.mast3r_utils import resize_img
 from mast3r_slam.frame import create_frame
+from .frame_saver import frame_saver
 
 logger = logging.getLogger("ImageProcessor")
 
@@ -63,7 +64,7 @@ class ImageProcessor:
             logger.error(f"❌ Error decoding {format_hint} image: {e}", exc_info=True)
             return None
             
-    def process_frame_for_slam(self, img_array: np.ndarray, frame_id: int, timestamp: float) -> Optional[Dict[str, Any]]:
+    def process_frame_for_slam(self, img_array: np.ndarray, frame_id: int, timestamp: float, current_pose=None) -> Optional[Dict[str, Any]]:
         """
         Process numpy image array through SLAM pipeline
         
@@ -71,6 +72,7 @@ class ImageProcessor:
             img_array: RGB numpy array, float32, range [0,1]
             frame_id: Frame identifier
             timestamp: Frame timestamp
+            current_pose: Current camera pose (lietorch.Sim3) or None for first frame
             
         Returns:
             Dictionary with processing results or None if failed
@@ -78,8 +80,13 @@ class ImageProcessor:
         try:
             start_time = time.time()
             
-            # Step 1: Create initial pose (identity for first frame, or could be from tracking)
-            T_WC = lietorch.Sim3.Identity(1, device=self.device)
+            # Step 1: Use current pose if available, otherwise identity for first frame (like original main.py)
+            if current_pose is not None:
+                T_WC = current_pose
+                logger.debug(f"Using current camera pose for frame {frame_id}")
+            else:
+                T_WC = lietorch.Sim3.Identity(1, device=self.device)
+                logger.debug(f"Using identity pose for frame {frame_id} (first frame)")
             
             # Step 2: Call create_frame (from frame.py) - this will handle resize_img internally
             logger.debug(f"Processing frame {frame_id} with shape {img_array.shape}")
@@ -128,13 +135,14 @@ class ImageProcessor:
                 "success": False
             }
             
-    def process_binary_frame(self, image_bytes: bytes, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def process_binary_frame(self, image_bytes: bytes, metadata: Dict[str, Any], current_pose=None) -> Optional[Dict[str, Any]]:
         """
         Complete pipeline: decode binary image and process for SLAM
         
         Args:
             image_bytes: Raw binary image data
             metadata: Frame metadata including format, frame_id, timestamp
+            current_pose: Current camera pose (lietorch.Sim3) or None for first frame
             
         Returns:
             Processing results dictionary or None if failed
@@ -156,8 +164,8 @@ class ImageProcessor:
                     "success": False
                 }
                 
-            # Step 2: Process through SLAM pipeline
-            result = self.process_frame_for_slam(img_array, frame_id, timestamp)
+            # Step 2: Process through SLAM pipeline with current pose
+            result = self.process_frame_for_slam(img_array, frame_id, timestamp, current_pose)
             
             if result and result.get('success'):
                 # Add metadata to result

@@ -6,6 +6,8 @@ Handles SLAM model setup for new WebSocket sessions with real-time user feedback
 
 import logging
 from .slam_initializer import SLAMInitializer
+from .global_optimizer import RealGlobalOptimizer
+from .frame_saver import frame_saver
 
 logger = logging.getLogger("SessionSetup")
 
@@ -31,6 +33,9 @@ class SessionSetup:
         try:
             logger.info(f"Starting SLAM setup for session {session_id}")
             
+            # Set up frame saving directory for this session
+            frame_saver.setup_session(session_id)
+            
             # Send loading message to frontend
             await connection_manager.send_debug_message(
                 session_id, "info", "Loading MASt3R model for session..."
@@ -42,6 +47,24 @@ class SessionSetup:
             
             # Load model immediately (this will clone from GPU template)
             session_data.slam_initializer._load_model()
+            
+            # Initialize global optimizer with the loaded model
+            await connection_manager.send_debug_message(
+                session_id, "info", "Initializing global optimizer..."
+            )
+            
+            try:
+                model = session_data.slam_initializer.model
+                device = model.device if hasattr(model, 'device') else "cuda"
+                session_data.global_optimizer = RealGlobalOptimizer(model, device)
+                logger.info(f"Global optimizer initialized for session {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to initialize global optimizer for session {session_id}: {e}")
+                # Continue without global optimizer - tracking will still work
+                session_data.global_optimizer = None
+                await connection_manager.send_debug_message(
+                    session_id, "warning", "Global optimizer initialization failed - continuing without optimization"
+                )
             
             # Send ready message to frontend
             await connection_manager.send_debug_message(

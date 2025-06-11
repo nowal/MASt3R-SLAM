@@ -6,7 +6,7 @@ import ModelOverlay from './ModelOverlay';
 import RecordingToggleButton from './RecordingToggleButton';
 
 interface IPhoneScreenProps {
-  onCameraReady: (stream: MediaStream) => void;
+  onCameraReady: (stream: MediaStream, videoElement: HTMLVideoElement) => void;
   onCameraError: (error: string) => void;
   isRecording: boolean;
   onRecordingToggle: () => void;

@@ -87,20 +87,11 @@ function FastApiCameraTester() {
      };
   }, [connectToBackend]); // Dependency is stable
 
-  // Handle camera ready
-  const handleCameraReady = useCallback((stream: MediaStream) => {
-    console.log("Main: Camera ready, stream received");
+  // Handle camera ready - now receives both stream and video element
+  const handleCameraReady = useCallback((stream: MediaStream, videoElement: HTMLVideoElement) => {
+    console.log("Main: Camera ready, stream and video element received");
     videoStreamRef.current = stream;
-    
-    // Create and setup video element for frame capture
-    if (!videoElementRef.current) {
-      const video = document.createElement('video');
-      video.autoplay = true;
-      video.playsInline = true;
-      video.muted = true;
-      video.srcObject = stream;
-      videoElementRef.current = video;
-    }
+    videoElementRef.current = videoElement; // Use the shared video element from CameraPermission
     
     setIsCameraReady(true);
   }, []);
