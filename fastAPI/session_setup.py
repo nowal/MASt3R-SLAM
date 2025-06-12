@@ -48,22 +48,59 @@ class SessionSetup:
             # Load model immediately (this will clone from GPU template)
             session_data.slam_initializer._load_model()
             
-            # Initialize global optimizer with the loaded model
+            # Initialize shared retrieval database
             await connection_manager.send_debug_message(
-                session_id, "info", "Initializing global optimizer..."
+                session_id, "info", "Initializing shared retrieval database..."
+            )
+            
+            try:
+                from mast3r_slam.mast3r_utils import load_retriever
+                model = session_data.slam_initializer.model
+                device = model.device if hasattr(model, 'device') else "cuda"
+                session_data.retrieval_database = load_retriever(model, device=device)
+                logger.info(f"Shared retrieval database initialized for session {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to initialize retrieval database for session {session_id}: {e}")
+                session_data.retrieval_database = None
+                await connection_manager.send_debug_message(
+                    session_id, "warning", "Retrieval database initialization failed - continuing without database"
+                )
+            
+            # Initialize global optimizer with the loaded model (synchronous mode)
+            await connection_manager.send_debug_message(
+                session_id, "info", "Initializing synchronous global optimizer..."
             )
             
             try:
                 model = session_data.slam_initializer.model
                 device = model.device if hasattr(model, 'device') else "cuda"
                 session_data.global_optimizer = RealGlobalOptimizer(model, device)
-                logger.info(f"Global optimizer initialized for session {session_id}")
+                logger.info(f"Synchronous global optimizer initialized for session {session_id}")
             except Exception as e:
                 logger.error(f"Failed to initialize global optimizer for session {session_id}: {e}")
                 # Continue without global optimizer - tracking will still work
                 session_data.global_optimizer = None
                 await connection_manager.send_debug_message(
                     session_id, "warning", "Global optimizer initialization failed - continuing without optimization"
+                )
+            
+            # Initialize real relocalization with the loaded model
+            await connection_manager.send_debug_message(
+                session_id, "info", "Initializing relocalization system..."
+            )
+            
+            try:
+                from .relocalization import RealRelocalizer
+                model = session_data.slam_initializer.model
+                device = model.device if hasattr(model, 'device') else "cuda"
+                session_data.relocalizer = RealRelocalizer(model, device)
+                logger.info(f"Real relocalizer initialized for session {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to initialize relocalizer for session {session_id}: {e}")
+                # Continue without relocalizer - will fallback to global instance
+                session_data.relocalizer = None
+                await connection_manager.send_debug_message(
+                    session_id, "warning", "Relocalizer initialization failed - will use fallback"
                 )
             
             # Send ready message to frontend

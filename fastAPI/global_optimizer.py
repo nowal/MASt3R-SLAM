@@ -89,7 +89,7 @@ class RealGlobalOptimizer:
     
     def __init__(self, model, device="cuda"):
         """
-        Initialize the real global optimizer
+        Initialize the real global optimizer for synchronous operation
         
         Args:
             model: MASt3R model for feature matching and optimization
@@ -101,18 +101,160 @@ class RealGlobalOptimizer:
         self.total_optimization_time = 0.0
         self.last_optimization_time = None
         
-        # Load retrieval database for loop closure detection
-        try:
-            self.retrieval_database = load_retriever(model, device=device)
-            logger.info("Retrieval database loaded successfully for loop closure detection")
-        except Exception as e:
-            logger.error(f"Failed to load retrieval database: {e}")
-            self.retrieval_database = None
-        
         # Factor graph will be created when first keyframe is processed
         self.factor_graph = None
         
-        logger.info(f"RealGlobalOptimizer initialized on device {device}")
+        logger.info(f"RealGlobalOptimizer initialized on device {device} (synchronous mode)")
+    
+    async def optimize_keyframe_sync(self, session_data, keyframe_idx: int) -> Dict[str, Any]:
+        """
+        Perform synchronous global optimization using shared keyframes database
+        
+        Args:
+            session_data: Session data containing shared keyframes and SLAM state
+            keyframe_idx: Index of the keyframe that triggered optimization
+            
+        Returns:
+            Dictionary with optimization results and timing
+        """
+        start_time = time.time()
+        self.optimization_count += 1
+        
+        logger.info(f"[GLOBAL_OPT] Starting synchronous optimization #{self.optimization_count} for keyframe {keyframe_idx}")
+        
+        try:
+            # Use shared keyframes directly (no separate optimization keyframes)
+            keyframes = session_data.keyframes
+            retrieval_database = session_data.retrieval_database
+            
+            if keyframes is None:
+                logger.error("No keyframes available for optimization")
+                return self._create_error_result("no_keyframes_available", start_time)
+            
+            if keyframe_idx >= len(keyframes):
+                logger.error(f"Invalid keyframe index {keyframe_idx}, only {len(keyframes)} keyframes available")
+                return self._create_error_result("invalid_keyframe_index", start_time)
+            
+            # Initialize factor graph if this is the first optimization
+            if self.factor_graph is None:
+                self._initialize_factor_graph_sync(session_data)
+            
+            # Get the frame that triggered optimization
+            frame = keyframes[keyframe_idx]
+            
+            # Build list of keyframes to optimize against
+            kf_idx = []
+            
+            # Add previous consecutive keyframes (local window)
+            n_consec = min(config["local_opt"].get("window_size", 1), keyframe_idx)
+            for j in range(min(n_consec, keyframe_idx)):
+                kf_idx.append(keyframe_idx - 1 - j)
+            
+            # Query retrieval database for loop closures
+            retrieval_inds = []
+            if retrieval_database is not None:
+                try:
+                    retrieval_inds = retrieval_database.update(
+                        frame,
+                        add_after_query=True,
+                        k=config["retrieval"]["k"],
+                        min_thresh=config["retrieval"]["min_thresh"]
+                    )
+                    kf_idx += retrieval_inds
+                    
+                    # Log loop closures
+                    lc_inds = set(retrieval_inds)
+                    lc_inds.discard(keyframe_idx - 1)  # Remove consecutive frame
+                    if len(lc_inds) > 0:
+                        logger.info(f"[LOOP_CLOSURE] Detected loop closures for keyframe {keyframe_idx}: {lc_inds}")
+                        
+                except Exception as e:
+                    logger.warning(f"Retrieval database query failed: {e}")
+            
+            # Remove duplicates and current keyframe
+            kf_idx = list(set(kf_idx))
+            if keyframe_idx in kf_idx:
+                kf_idx.remove(keyframe_idx)
+            
+            # Add factors (constraints) between keyframes
+            factors_added = False
+            if kf_idx:
+                try:
+                    frame_idx = [keyframe_idx] * len(kf_idx)
+                    factors_added = self.factor_graph.add_factors(
+                        kf_idx, 
+                        frame_idx, 
+                        config["local_opt"]["min_match_frac"]
+                    )
+                    
+                    if factors_added:
+                        logger.info(f"[FACTORS] Added constraints between keyframe {keyframe_idx} and keyframes {kf_idx}")
+                    else:
+                        logger.warning(f"[FACTORS] Failed to add sufficient constraints for keyframe {keyframe_idx}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to add factors: {e}")
+                    return self._create_error_result(f"factor_addition_failed: {str(e)}", start_time)
+            
+            # Perform bundle adjustment if we have constraints
+            if factors_added:
+                try:
+                    optimization_start = time.time()
+                    
+                    # Choose optimization method based on calibration
+                    if config.get("use_calib", False):
+                        self.factor_graph.solve_GN_calib()
+                        method = "solve_GN_calib"
+                    else:
+                        self.factor_graph.solve_GN_rays()
+                        method = "solve_GN_rays"
+                    
+                    optimization_time = time.time() - optimization_start
+                    logger.info(f"[BUNDLE_ADJUSTMENT] Completed {method} in {optimization_time:.3f}s")
+                    
+                except Exception as e:
+                    logger.error(f"Bundle adjustment failed: {e}")
+                    return self._create_error_result(f"bundle_adjustment_failed: {str(e)}", start_time)
+            else:
+                logger.info(f"[SKIP] No factors added for keyframe {keyframe_idx}, skipping bundle adjustment")
+            
+            # Calculate timing
+            end_time = time.time()
+            duration = end_time - start_time
+            self.total_optimization_time += duration
+            
+            # Calculate time since last optimization
+            time_since_last = None
+            if self.last_optimization_time is not None:
+                time_since_last = start_time - self.last_optimization_time
+            self.last_optimization_time = start_time
+            
+            # Create success result
+            result = {
+                "session_id": getattr(session_data, 'session_id', 'unknown'),
+                "keyframe_idx": keyframe_idx,
+                "optimization_count": self.optimization_count,
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration": duration,
+                "time_since_last": time_since_last,
+                "status": "optimization_completed",
+                "factors_added": factors_added,
+                "keyframes_optimized_against": kf_idx,
+                "loop_closures_detected": len(retrieval_inds) if retrieval_inds else 0,
+                "total_keyframes": len(keyframes)
+            }
+            
+            logger.info(
+                f"[GLOBAL_OPT] Completed synchronous #{self.optimization_count} for keyframe {keyframe_idx} "
+                f"in {duration:.3f}s (factors: {factors_added}, loop_closures: {len(retrieval_inds) if retrieval_inds else 0})"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Synchronous global optimization failed for keyframe {keyframe_idx}: {e}", exc_info=True)
+            return self._create_error_result(f"optimization_failed: {str(e)}", start_time)
     
     async def optimize_keyframe(self, session_data, keyframe_idx: int) -> Dict[str, Any]:
         """
@@ -318,6 +460,34 @@ class RealGlobalOptimizer:
             )
             
             logger.info("Factor graph initialized successfully with optimization keyframes")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize factor graph: {e}")
+            raise e
+    
+    def _initialize_factor_graph_sync(self, session_data):
+        """Initialize the factor graph for synchronous operation using shared keyframes"""
+        try:
+            # Get camera intrinsics if available
+            K = getattr(session_data, 'K', None)
+            
+            # Log tensor shapes of all keyframes before passing to FactorGraph
+            logger.info(f"[TENSOR_DEBUG] Initializing FactorGraph with {len(session_data.keyframes)} shared keyframes")
+            for i in range(len(session_data.keyframes)):
+                frame = session_data.keyframes[i]
+                pose_shape = frame.T_WC.data.shape
+                pose_data_sample = frame.T_WC.data.flatten()[:3]  # Show first 3 values
+                logger.info(f"[TENSOR_DEBUG] FactorGraph keyframe {i} (frame_id={frame.frame_id}) pose shape: {pose_shape}, data sample: {pose_data_sample}")
+            
+            # Create factor graph using shared keyframes directly
+            self.factor_graph = FactorGraph(
+                self.model, 
+                session_data.keyframes, 
+                K=K, 
+                device=self.device
+            )
+            
+            logger.info("Factor graph initialized successfully with shared keyframes")
             
         except Exception as e:
             logger.error(f"Failed to initialize factor graph: {e}")

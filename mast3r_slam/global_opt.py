@@ -1,5 +1,6 @@
 import lietorch
 import torch
+import logging
 from mast3r_slam.config import config
 from mast3r_slam.frame import SharedKeyframes
 from mast3r_slam.geometry import (
@@ -7,6 +8,8 @@ from mast3r_slam.geometry import (
 )
 from mast3r_slam.mast3r_utils import mast3r_match_symmetric
 import mast3r_slam_backends
+
+logger = logging.getLogger("FactorGraph")
 
 
 class FactorGraph:
@@ -68,12 +71,40 @@ class FactorGraph:
         ii_tensor = torch.as_tensor(ii, device=self.device)
         jj_tensor = torch.as_tensor(jj, device=self.device)
 
+        # Add detailed logging for relocalization validation
+        if is_reloc:
+            logger.info(f"[FACTOR_GRAPH] Relocalization validation for edges: ii={ii}, jj={jj}")
+            logger.info(f"[FACTOR_GRAPH] Q_conf threshold: {self.cfg['Q_conf']:.3f}")
+            logger.info(f"[FACTOR_GRAPH] Required min_match_frac: {min_match_frac:.3f} ({min_match_frac*100:.1f}%)")
+            
+            for edge_idx in range(len(ii)):
+                valid_j_count = valid_j[edge_idx].sum().item()
+                valid_i_count = valid_i[edge_idx].sum().item()
+                match_frac_j_val = match_frac_j[edge_idx].item()
+                match_frac_i_val = match_frac_i[edge_idx].item()
+                min_match_frac_val = min(match_frac_j_val, match_frac_i_val)
+                
+                logger.info(f"[FACTOR_GRAPH] Edge {edge_idx}: keyframe {ii[edge_idx]} -> keyframe {jj[edge_idx]}")
+                logger.info(f"[FACTOR_GRAPH]   - Direction j->i: {valid_j_count:,} / {nj:,} = {match_frac_j_val:.3f} ({match_frac_j_val*100:.1f}%)")
+                logger.info(f"[FACTOR_GRAPH]   - Direction i->j: {valid_i_count:,} / {ni:,} = {match_frac_i_val:.3f} ({match_frac_i_val*100:.1f}%)")
+                logger.info(f"[FACTOR_GRAPH]   - Minimum: {min_match_frac_val:.3f} ({min_match_frac_val*100:.1f}%)")
+                
+                if min_match_frac_val >= min_match_frac:
+                    logger.info(f"[FACTOR_GRAPH]   - ✅ PASS: {min_match_frac_val:.3f} >= {min_match_frac:.3f}")
+                else:
+                    deficit = min_match_frac - min_match_frac_val
+                    logger.info(f"[FACTOR_GRAPH]   - ❌ FAIL: {min_match_frac_val:.3f} < {min_match_frac:.3f} (deficit: {deficit:.3f} = {deficit*100:.1f}%)")
+
         # NOTE: Saying we need both edge directions to be above thrhreshold to accept either
         invalid_edges = torch.minimum(match_frac_j, match_frac_i) < min_match_frac
         consecutive_edges = ii_tensor == (jj_tensor - 1)
         invalid_edges = (~consecutive_edges) & invalid_edges
 
         if invalid_edges.any() and is_reloc:
+            invalid_count = invalid_edges.sum().item()
+            total_edges = len(invalid_edges)
+            logger.info(f"[FACTOR_GRAPH] Relocalization FAILED: {invalid_count}/{total_edges} edges below threshold")
+            logger.info(f"[FACTOR_GRAPH] Invalid edges: {invalid_edges.tolist()}")
             return False
 
         valid_edges = ~invalid_edges

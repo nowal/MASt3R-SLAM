@@ -55,4 +55,5 @@ retrieval:
 
 reloc:
   min_match_frac: 0.3
-  strict: True
+  strict: False
+  timeout_seconds: 5.0

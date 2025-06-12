@@ -452,17 +452,26 @@ class DataReceiver:
                 # Add frame as new keyframe
                 session_data.keyframes.append(frame)
                 session_data.tracking_stats["keyframes_added"] += 1
-                
-                # Queue real global optimization as asyncio task
                 keyframe_idx = len(session_data.keyframes) - 1
-                import asyncio
-                from .global_optimizer import trigger_global_optimization_async
                 
-                # Create asyncio task that runs in background
-                asyncio.create_task(
-                    trigger_global_optimization_async(session_data, keyframe_idx)
-                )
-                logger.info(f"[GLOBAL_OPT] Queued asyncio task for session {session_id}, keyframe {keyframe_idx}")
+                # Perform synchronous global optimization
+                logger.info(f"Session {session_id}: Performing synchronous optimization for keyframe {keyframe_idx}")
+                
+                if session_data.global_optimizer is not None:
+                    try:
+                        optimization_result = await session_data.global_optimizer.optimize_keyframe_sync(
+                            session_data, keyframe_idx
+                        )
+                        
+                        if optimization_result.get("status") == "optimization_completed":
+                            logger.info(f"Session {session_id}: Synchronous optimization completed in {optimization_result.get('duration', 0):.3f}s")
+                        else:
+                            logger.warning(f"Session {session_id}: Synchronous optimization failed: {optimization_result.get('error', 'unknown')}")
+                            
+                    except Exception as e:
+                        logger.error(f"Session {session_id}: Synchronous optimization exception: {e}")
+                else:
+                    logger.warning(f"Session {session_id}: No global optimizer available for synchronous optimization")
                 
                 logger.info(f"Session {session_id}: New keyframe added ({len(session_data.keyframes)} total)")
                 return {
@@ -499,27 +508,39 @@ class DataReceiver:
         try:
             session_data.tracking_stats["relocalization_attempts"] += 1
             
-            # Queue dummy relocalization task
-            from fastapi import BackgroundTasks
-            background_tasks = BackgroundTasks()
-            add_relocalization_task(background_tasks, session_id, frame, "relocalization_mode")
+            # Use real relocalization implementation
+            from .relocalization import relocalize_frame_async
             
-            # For dummy implementation, randomly succeed or stay in reloc mode
-            import random
-            if random.random() > 0.7:  # 30% chance to succeed and return to tracking
-                session_data.slam_mode = Mode.TRACKING
-                logger.info(f"Session {session_id}: Dummy relocalization succeeded, returning to TRACKING")
+            logger.info(f"Session {session_id}: Attempting real relocalization for frame {frame.frame_id}")
+            
+            # Call real relocalization
+            reloc_result = await relocalize_frame_async(session_data, frame, "relocalization_mode")
+            
+            # Handle relocalization result
+            if reloc_result.get("success", False):
+                # Relocalization succeeded - return to tracking mode
+                new_mode = reloc_result.get("new_mode", Mode.TRACKING)
+                session_data.slam_mode = new_mode
+                
+                logger.info(f"Session {session_id}: Real relocalization succeeded, returning to TRACKING mode")
                 return {
                     'slam_initialized': True,
                     'slam_status': 'relocalization_success_returning_to_tracking',
-                    'slam_mode': 'TRACKING'
+                    'slam_mode': 'TRACKING',
+                    'relocalization_result': reloc_result
                 }
             else:
-                logger.info(f"Session {session_id}: Dummy relocalization continuing...")
+                # Relocalization failed - stay in reloc mode
+                new_mode = reloc_result.get("new_mode", Mode.RELOC)
+                session_data.slam_mode = new_mode
+                
+                error_msg = reloc_result.get("error", "unknown_error")
+                logger.info(f"Session {session_id}: Real relocalization failed ({error_msg}), staying in RELOC mode")
                 return {
                     'slam_initialized': True,
-                    'slam_status': 'relocalization_in_progress',
-                    'slam_mode': 'RELOC'
+                    'slam_status': f'relocalization_failed_continuing: {error_msg}',
+                    'slam_mode': 'RELOC',
+                    'relocalization_result': reloc_result
                 }
                 
         except Exception as e:
