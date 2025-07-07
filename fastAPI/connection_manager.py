@@ -206,6 +206,20 @@ class ConnectionManager:
             logger.error(f"Failed to send message to session {session_id}: {e}")
             await self.disconnect_session(session_id)
             return False
+    
+    async def send_binary_message(self, session_id: str, binary_data: bytes) -> bool:
+        """Send binary message to a specific session"""
+        session_data = await self.get_session(session_id)
+        if not session_data or not session_data.is_connected:
+            return False
+            
+        try:
+            await session_data.websocket.send_bytes(binary_data)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send binary message to session {session_id}: {e}")
+            await self.disconnect_session(session_id)
+            return False
             
     async def send_debug_message(self, session_id: str, level: str, message: str) -> bool:
         """Send debug log message to frontend"""

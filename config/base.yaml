@@ -57,3 +57,10 @@ reloc:
   min_match_frac: 0.3
   strict: False
   timeout_seconds: 5.0
+
+pointcloud:
+  transmission_interval: 5  # Send point cloud every 5th keyframe
+  confidence_threshold: 0.5  # Minimum confidence for points to include
+  max_points_per_update: 100000  # Maximum points per transmission
+  compression: "draco"  # Use Draco compression for transmission
+  use_colors: True  # Include color information

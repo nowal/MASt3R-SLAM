@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { forwardRef } from 'react';
 import CameraPermission from './CameraPermission';
 import ModelOverlay from './ModelOverlay';
 import RecordingToggleButton from './RecordingToggleButton';
@@ -16,7 +16,7 @@ interface IPhoneScreenProps {
   isIncrementalUpdate: boolean;
 }
 
-export default function IPhoneScreen({
+const IPhoneScreen = forwardRef<{ handleMessage: (message: any) => void }, IPhoneScreenProps>(({
   onCameraReady,
   onCameraError,
   isRecording,
@@ -25,7 +25,7 @@ export default function IPhoneScreen({
   colorsData,
   posesData,
   isIncrementalUpdate
-}: IPhoneScreenProps) {
+}, ref) => {
   return (
     <div
       style={{
@@ -50,6 +50,7 @@ export default function IPhoneScreen({
       
       {/* Model Overlay - Top 25% */}
       <ModelOverlay
+        ref={ref}
         pointsData={pointsData}
         colorsData={colorsData}
         posesData={posesData}
@@ -63,4 +64,8 @@ export default function IPhoneScreen({
       />
     </div>
   );
-}
+});
+
+IPhoneScreen.displayName = 'IPhoneScreen';
+
+export default IPhoneScreen;

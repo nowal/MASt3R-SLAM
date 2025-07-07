@@ -19,6 +19,7 @@ from .frame_tracker_wrapper import FrameTrackerWrapper, create_frame_tracker_wra
 from .global_optimizer import add_global_optimization_task
 from .relocalization import add_relocalization_task
 from .frame_saver import frame_saver
+from .pointcloud_transmitter import pointcloud_transmitter
 from mast3r_slam.frame import Mode, Frame
 
 logger = logging.getLogger("DataReceiver")
@@ -457,6 +458,7 @@ class DataReceiver:
                 # Perform synchronous global optimization
                 logger.info(f"Session {session_id}: Performing synchronous optimization for keyframe {keyframe_idx}")
                 
+                optimization_completed = False
                 if session_data.global_optimizer is not None:
                     try:
                         optimization_result = await session_data.global_optimizer.optimize_keyframe_sync(
@@ -464,6 +466,7 @@ class DataReceiver:
                         )
                         
                         if optimization_result.get("status") == "optimization_completed":
+                            optimization_completed = True
                             logger.info(f"Session {session_id}: Synchronous optimization completed in {optimization_result.get('duration', 0):.3f}s")
                         else:
                             logger.warning(f"Session {session_id}: Synchronous optimization failed: {optimization_result.get('error', 'unknown')}")
@@ -472,6 +475,27 @@ class DataReceiver:
                         logger.error(f"Session {session_id}: Synchronous optimization exception: {e}")
                 else:
                     logger.warning(f"Session {session_id}: No global optimizer available for synchronous optimization")
+                
+                # Check if we should transmit point cloud (every 5th keyframe after optimization)
+                total_keyframes = len(session_data.keyframes)
+                should_transmit = await pointcloud_transmitter.should_transmit_pointcloud(total_keyframes)
+                
+                if should_transmit and optimization_completed:
+                    logger.info(f"Session {session_id}: Triggering point cloud transmission for keyframe {total_keyframes}")
+                    try:
+                        transmission_result = await pointcloud_transmitter.generate_and_transmit_pointcloud(
+                            session_data, session_id, keyframe_idx
+                        )
+                        
+                        if transmission_result.get("status") == "transmission_completed":
+                            logger.info(f"Session {session_id}: Point cloud transmission completed: {transmission_result.get('point_count', 0)} points")
+                        else:
+                            logger.warning(f"Session {session_id}: Point cloud transmission failed: {transmission_result.get('error', 'unknown')}")
+                            
+                    except Exception as e:
+                        logger.error(f"Session {session_id}: Point cloud transmission exception: {e}")
+                elif should_transmit and not optimization_completed:
+                    logger.warning(f"Session {session_id}: Skipping point cloud transmission - optimization did not complete successfully")
                 
                 logger.info(f"Session {session_id}: New keyframe added ({len(session_data.keyframes)} total)")
                 return {

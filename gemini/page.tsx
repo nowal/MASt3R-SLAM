@@ -48,6 +48,7 @@ function FastApiCameraTester() {
   const sendMessageRef = useRef<((message: any) => boolean) | null>(null);
   const videoStreamRef = useRef<MediaStream | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const iPhoneScreenRef = useRef<{ handleMessage: (message: any) => void } | null>(null);
 
   // 1. Connect to backend
   const connectToBackend = useCallback(async () => {
@@ -122,6 +123,20 @@ function FastApiCameraTester() {
   // Handle WebSocket messages
   const handleWebSocketMessage = useCallback((message: any) => {
     setLastMessage(message); // Store raw message
+
+    // Handle point cloud messages first
+    if (message.type === "POINT_CLOUD_UPDATE" || message.type === "BINARY_POINT_CLOUD_DATA") {
+      // Forward point cloud messages to the point cloud viewer
+      if (iPhoneScreenRef.current) {
+        iPhoneScreenRef.current.handleMessage(message);
+      }
+      
+      // Update status for point cloud updates
+      if (message.type === "POINT_CLOUD_UPDATE") {
+        setStatusMessage(`Point cloud update: ${message.point_count} points from ${message.total_keyframes} keyframes`);
+      }
+      return; // Don't process further
+    }
 
     // Handle different message types from backend
     if (message.type === "debug_log") {
@@ -216,6 +231,7 @@ function FastApiCameraTester() {
       
       {/* iPhone Screen - Main Focus */}
       <IPhoneScreen
+        ref={iPhoneScreenRef}
         onCameraReady={handleCameraReady}
         onCameraError={handleCameraError}
         isRecording={isRecording}

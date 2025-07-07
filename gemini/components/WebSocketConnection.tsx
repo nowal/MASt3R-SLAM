@@ -55,8 +55,19 @@ export default function WebSocketConnection({
 
       ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data);
-          onMessage(message);
+          // Handle binary messages (point cloud data)
+          if (event.data instanceof ArrayBuffer) {
+            console.log("WebSocketConnection: Received binary message:", event.data.byteLength, "bytes");
+            onMessage({
+              type: 'BINARY_POINT_CLOUD_DATA',
+              data: event.data,
+              timestamp: Date.now()
+            });
+          } else {
+            // Handle JSON messages
+            const message = JSON.parse(event.data);
+            onMessage(message);
+          }
         } catch (e) {
           console.error("WebSocketConnection: Failed to parse message:", event.data, e);
           onMessage(`Non-JSON: ${event.data}`);
